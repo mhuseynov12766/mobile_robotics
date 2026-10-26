@@ -23,8 +23,8 @@ AXLE_TRACK = 110
 robot = DriveBase(LEFT_MOTOR, RIGHT_MOTOR, WHEEL_DIAMETER, AXLE_TRACK)
 
 # Calibration values measured from lab floor (62) and tape (~7.5)
-BLACK_REFLECTION = 9
-WHITE_REFLECTION = 60
+BLACK_REFLECTION = 7.5
+WHITE_REFLECTION = 62
 
 # Calculate the target threshold (the edge between floor and tape)
 TARGET_THRESHOLD = (BLACK_REFLECTION + WHITE_REFLECTION) / 2
