@@ -17,14 +17,14 @@ RIGHT_MOTOR = Motor(Port.C)
 LINE_SENSOR = ColorSensor(Port.S3)
 OBSTACLE_SENSOR = UltrasonicSensor(Port.S4)
 
-# Setup robot dimensions for the DriveBase (wheel diameter in mm, axle track in mm)
-WHEEL_DIAMETER = 55.5
-AXLE_TRACK = 120
+# Setup robot dimensions for the DriveBase 
+WHEEL_DIAMETER = 55
+AXLE_TRACK = 110
 robot = DriveBase(LEFT_MOTOR, RIGHT_MOTOR, WHEEL_DIAMETER, AXLE_TRACK)
 
-# Calibration values measured from your lab floor (62) and tape (~7.5)
-BLACK_REFLECTION = 7.5
-WHITE_REFLECTION = 62.0
+# Calibration values measured from lab floor (62) and tape (~7.5)
+BLACK_REFLECTION = 9
+WHITE_REFLECTION = 60
 
 # Calculate the target threshold (the edge between floor and tape)
 TARGET_THRESHOLD = (BLACK_REFLECTION + WHITE_REFLECTION) / 2

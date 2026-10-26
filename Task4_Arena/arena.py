@@ -24,23 +24,27 @@ robot = DriveBase(left_motor, right_motor, 54.8, 109.6)
 
 TAPE = 25
 ROBOT_MM = 250
-REVERSE_MM = 150
+REVERSE_MIN_MM = 100
+REVERSE_MM = 200
 
-SPEED = 150
+SPEED = 100
 TURN_RATE = 120
+EDGE_SPEED = 50
+EDGE_TURN_RATE = 90
+EDGE_TURN_DEG = 90
 
 LOOP_MS = 50
 CONFIRM = 2
-AVOID_MIN_S = 0.6
 
 
 # Setup the robot's memory
 
 st = {
     'escape': 'WANDER',
+    'floor_n': 0,
     'near_n': 0,
-    'avoid_until': -1,
-    'last_turn': 0,
+    'avoid_phase': None,
+    'last_avoid_side': 0,
     'wander_until': 0,
     'wander_turn': 0,
     'wander_mark': 0
@@ -61,34 +65,55 @@ def escape(s, st):
         if s['reflection'] < TAPE:
             st['escape'] = 'REVERSE'
             st['mark'] = s['odo_mm']
-            return (-SPEED, 0)
+            st['floor_n'] = 0
+            st['near_n'] = 0
+            st['avoid_phase'] = None
+            return (-EDGE_SPEED, 0)
 
         return None
 
     if state == 'REVERSE':
-        if st['mark'] - s['odo_mm'] >= REVERSE_MM:
+        reverse_mm = st['mark'] - s['odo_mm']
+        if reverse_mm >= REVERSE_MIN_MM and s['reflection'] >= TAPE:
+            st['floor_n'] += 1
+        else:
+            st['floor_n'] = 0
+
+        if (st['floor_n'] >= CONFIRM or reverse_mm >= REVERSE_MM):
             st['escape'] = 'TURN'
             st['mark'] = s['odo_deg']
-            st['turn'] = choice((-1, 1)) * uniform(90, 180)
+            st['turn'] = -EDGE_TURN_DEG
+            st['floor_n'] = 0
+            return (0, -EDGE_TURN_RATE)
 
-            return (0, TURN_RATE if st['turn'] > 0
-                    else -TURN_RATE)
-
-        return (-SPEED, 0)
+        return (-EDGE_SPEED, 0)
 
     if state == 'TURN':
         if abs(s['odo_deg'] - st['mark']) >= abs(st['turn']):
-            st['escape'] = 'WANDER'
-            st['last_turn'] = 1 if st['turn'] > 0 else -1
-            return None
+            if s['reflection'] >= TAPE:
+                st['floor_n'] += 1
+                if st['floor_n'] >= CONFIRM:
+                    st['escape'] = 'WANDER'
+                    return (EDGE_SPEED, 0)
+            else:
+                st['floor_n'] = 0
+                st['mark'] = s['odo_deg']
 
-        return (0, TURN_RATE if st['turn'] > 0
-                else -TURN_RATE)
+        return (0, -EDGE_TURN_RATE)
 
     return None
 
 
 # Define the collision avoidance behaviour
+
+def start_avoid_turn(s, st, side):
+    st['avoid_phase'] = 'TURN'
+    st['avoid_side'] = side
+    st['last_avoid_side'] = side
+    st['avoid_mark'] = s['odo_deg']
+    st['avoid_turn'] = uniform(90, 180)
+    return (0, side * TURN_RATE)
+
 
 def avoid(s, st):
     near = s['distance'] < ROBOT_MM
@@ -98,15 +123,25 @@ def avoid(s, st):
     else:
         st['near_n'] = 0
 
-    active = st['avoid_until'] > s['t']
+    phase = st['avoid_phase']
 
-    if st['near_n'] >= CONFIRM and not active:
-        st['side'] = st['last_turn'] or choice((-1, 1))
-        st['avoid_until'] = s['t'] + AVOID_MIN_S
-        active = True
+    if phase is None:
+        if st['near_n'] < CONFIRM:
+            return None
 
-    if active:
-        return (0, st['side'] * TURN_RATE)
+        side = (-st['last_avoid_side'] if st['last_avoid_side']
+                else choice((-1, 1)))
+        return start_avoid_turn(s, st, side)
+
+    if phase == 'TURN':
+        if abs(s['odo_deg'] - st['avoid_mark']) < st['avoid_turn']:
+            return (0, st['avoid_side'] * TURN_RATE)
+
+        if not near:
+            st['avoid_phase'] = None
+            return None
+
+        return start_avoid_turn(s, st, -st['last_avoid_side'])
 
     return None
 
