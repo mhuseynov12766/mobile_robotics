@@ -1,169 +1,157 @@
-
 #!/usr/bin/env pybricks-micropython
 
 from pybricks.hubs import EV3Brick
-from pybricks.ev3devices import Motor, ColorSensor
+from pybricks.ev3devices import Motor, ColorSensor, UltrasonicSensor
 from pybricks.parameters import Port
 from pybricks.robotics import DriveBase
-from pybricks.tools import wait
+from pybricks.tools import wait, StopWatch, DataLog
 
 # Initialize the EV3 brick
 ev3 = EV3Brick()
 
-# Initialize drive motors
+# Initialize drive motors (Port B for left, Port C for right)
 LEFT_MOTOR = Motor(Port.B)
 RIGHT_MOTOR = Motor(Port.C)
 
-# Initialize the color sensor
+# Initialize sensors (Color sensor on Port 3, Ultrasonic on Port 4)
 LINE_SENSOR = ColorSensor(Port.S3)
+OBSTACLE_SENSOR = UltrasonicSensor(Port.S4)
 
-# Set up the robot's dimensions
-WHEEL_DIAMETER = 55
-AXLE_TRACK = 110
+# Setup robot dimensions for the DriveBase using your precise measurements
+WHEEL_DIAMETER = 54.8
+AXLE_TRACK = 109.6
+robot = DriveBase(LEFT_MOTOR, RIGHT_MOTOR, WHEEL_DIAMETER, AXLE_TRACK)
 
-robot = DriveBase(
-    LEFT_MOTOR,
-    RIGHT_MOTOR,
-    WHEEL_DIAMETER,
-    AXLE_TRACK
-)
-
-# Calibration values measured from the lab floor and tape
+# Calibration values measured from your lab floor (62) and tape (~7.5)
 BLACK_REFLECTION = 7.5
-WHITE_REFLECTION = 62
+WHITE_REFLECTION = 62.0
 
-# Calculate the target threshold
-TARGET_THRESHOLD = (
-    BLACK_REFLECTION + WHITE_REFLECTION
-) / 2
+# Calculate the target threshold (the edge between floor and tape) -> ~34.75
+TARGET_THRESHOLD = (BLACK_REFLECTION + WHITE_REFLECTION) / 2
 
-# PD controller parameters
-DRIVE_SPEED = 170       # Forward speed in mm/s
-PROPORTIONAL_GAIN = 1.8
-DERIVATIVE_GAIN = 2.0
-MAX_TURN_RATE = 130     # Maximum turn rate in deg/s
+# Control parameters (slower speed for stability)
+DRIVE_SPEED = 120       # Base forward speed in mm/s
+PROPORTIONAL_GAIN = 1.8 # Kp: proportional gain for error correction
+DERIVATIVE_GAIN = 2.0   # Kd: derivative gain to smooth turns
+MAX_TURN_RATE = 110     # Maximum turn rate limit in deg/s
 
-# Line-loss recovery parameters
-LOST_LINE_TOLERANCE = 0
-LOST_LINE_COUNT_MAX = 50
-TOTAL_MAX_SEARCHES = 13
-RIGHT_SEARCH_LIMIT = 120
-TOTAL_SEARCH_LIMIT = 600
-SEARCH_TURN_RATE = 50
+# Obstacle detection threshold (distance in mm)
+STOP_DISTANCE = 125
 
+# Line loss recovery parameters 
+LOST_LINE_TOLERANCE = 5   # Margin around target to confirm line detection
+LOST_LINE_COUNT_MAX = 30  # Consecutive loops off track before triggering search
+SEARCH_TURN_RATE = 45     # Controlled turn speed while searching
+
+# Motor angle limits for thorough left and right scanning sweeps
+RIGHT_SEARCH_LIMIT = 180  # Degrees to turn right
+LEFT_SEARCH_LIMIT = 360   # Total degrees to sweep left across center
+
+# Initialize DataLog to record run evidence onto the EV3 brick storage
+run_logger = DataLog('time_ms', 'reflection', 'turn_rate')
+run_timer = StopWatch()
 
 def search_for_line(mission_lost_count):
-    """Search for the line when the robot loses it."""
+    """
+    Executes an expanded, thorough motor-encoder-based sweep: 
+    First turns right deeply, then sweeps wide to the left to capture the line.
+    """
     robot.stop()
     ev3.speaker.beep(100, 100)
-
+    
     SEARCH_SPEED = 0
+    
+    # --- STEP 1: Deep Sweep Right ---
+    initial_angle = LEFT_MOTOR.angle()
+    while abs(LEFT_MOTOR.angle() - initial_angle) < RIGHT_SEARCH_LIMIT:
+        robot.drive(SEARCH_SPEED, SEARCH_TURN_RATE)
+        if LINE_SENSOR.reflection() <= (TARGET_THRESHOLD - LOST_LINE_TOLERANCE):
+            robot.stop()
+            ev3.speaker.beep(1000, 100)
+            wait(200)
+            return mission_lost_count + 1
+        wait(10)
 
-    if mission_lost_count < TOTAL_MAX_SEARCHES:
+    # --- STEP 2: Wide Sweep Left across center and past it ---
+    initial_angle = LEFT_MOTOR.angle()
+    while abs(LEFT_MOTOR.angle() - initial_angle) < LEFT_SEARCH_LIMIT:
+        robot.drive(SEARCH_SPEED, -SEARCH_TURN_RATE)
+        if LINE_SENSOR.reflection() <= (TARGET_THRESHOLD - LOST_LINE_TOLERANCE):
+            robot.stop()
+            ev3.speaker.beep(1000, 100)
+            wait(200)
+            return mission_lost_count + 1
+        wait(10)
 
-        # Search towards the right
-        initial_angle = LEFT_MOTOR.angle()
-
-        while LEFT_MOTOR.angle() - initial_angle < RIGHT_SEARCH_LIMIT:
-            robot.drive(SEARCH_SPEED, SEARCH_TURN_RATE)
-
-            if LINE_SENSOR.reflection() <= (
-                TARGET_THRESHOLD - LOST_LINE_TOLERANCE
-            ):
-                robot.stop()
-                ev3.speaker.beep(1000, 100)
-                wait(500)
-                return mission_lost_count + 1
-
-        # Sweep towards the left
-        initial_angle = LEFT_MOTOR.angle()
-
-        while initial_angle - LEFT_MOTOR.angle() < TOTAL_SEARCH_LIMIT:
-            robot.drive(SEARCH_SPEED, -SEARCH_TURN_RATE)
-
-            if LINE_SENSOR.reflection() <= (
-                TARGET_THRESHOLD - LOST_LINE_TOLERANCE
-            ):
-                robot.stop()
-                ev3.speaker.beep(1000, 100)
-                wait(500)
-                return mission_lost_count + 1
-
-        return mission_lost_count + 1
-
-    else:
-        # Continue searching until the line is found
-        while True:
-            initial_angle = LEFT_MOTOR.angle()
-
-            while LEFT_MOTOR.angle() - initial_angle < TOTAL_SEARCH_LIMIT:
-                robot.drive(SEARCH_SPEED, -SEARCH_TURN_RATE)
-
-                if LINE_SENSOR.reflection() <= (
-                    TARGET_THRESHOLD - LOST_LINE_TOLERANCE
-                ):
-                    robot.stop()
-                    ev3.speaker.beep(1000, 100)
-                    wait(500)
-                    return TOTAL_MAX_SEARCHES
-
-            wait(500)
-
+    return mission_lost_count + 1
+    
+def wait_for_obstacle_removal():
+    """Pauses the robot when an obstacle is detected until it is cleared."""
+    robot.stop()
+    ev3.speaker.beep(500, 100) 
+    
+    while OBSTACLE_SENSOR.distance() < STOP_DISTANCE:
+        wait(200) 
+    
+    ev3.speaker.beep(1000, 100)
+    wait(500)
 
 def run_mission():
-    """Run PD line following with line-loss recovery."""
+    """Main execution loop for PD line following, obstacle monitoring, and data logging."""
     ev3.speaker.beep()
-
+    
     lost_line_counter = 0
     mission_lost_count = 0
     last_error = 0
-
+    
     robot.drive(DRIVE_SPEED, 0)
+    run_timer.reset()
 
     while True:
-        # Read the current color sensor reflection
+        # Check distance to any oncoming obstacle or robot
+        current_distance = OBSTACLE_SENSOR.distance()
+        if current_distance < STOP_DISTANCE:
+            wait_for_obstacle_removal()
+            continue 
+
+        # Read current reflection from the color sensor
         current_reflection = LINE_SENSOR.reflection()
 
-        # Detect possible line loss
-        if current_reflection > (
-            TARGET_THRESHOLD + LOST_LINE_TOLERANCE
-        ):
+        # Count consecutive readings off the line to detect complete line loss
+        if current_reflection > (TARGET_THRESHOLD + LOST_LINE_TOLERANCE):
             lost_line_counter += 1
-
             if lost_line_counter > LOST_LINE_COUNT_MAX:
-                mission_lost_count = search_for_line(
-                    mission_lost_count
-                )
+                mission_lost_count = search_for_line(mission_lost_count)
                 lost_line_counter = 0
-                last_error = 0
         else:
             lost_line_counter = 0
 
-        # Calculate the PD controller error
+        # --- PD Controller Logic ---
+        # 1. Proportional Error (deviation from the target edge)
         error = current_reflection - TARGET_THRESHOLD
+
+        # 2. Derivative Error (rate of change of error to anticipate curves)
         derivative = error - last_error
 
-        # Calculate the steering turn rate
-        turn_rate = (
-            PROPORTIONAL_GAIN * error
-            + DERIVATIVE_GAIN * derivative
-        )
+        # 3. Compute steering turn rate correction
+        turn_rate = (PROPORTIONAL_GAIN * error) + (DERIVATIVE_GAIN * derivative)
 
-        # Limit the turn rate
+        # Clamp turn rate to safe maximum limits
         if turn_rate > MAX_TURN_RATE:
             turn_rate = MAX_TURN_RATE
         elif turn_rate < -MAX_TURN_RATE:
             turn_rate = -MAX_TURN_RATE
 
-        # Drive forward while correcting the steering
+        # Apply movement command to DriveBase
         robot.drive(DRIVE_SPEED, turn_rate)
 
-        # Store the error for the next iteration
+        # Record operational data row-by-row into the CSV log file on the brick
+        run_logger.log(run_timer.time(), current_reflection, turn_rate)
+
+        # Store current error for the next loop's derivative calculation
         last_error = error
 
-        # Short delay between control updates
         wait(10)
-
 
 if __name__ == "__main__":
     run_mission()
